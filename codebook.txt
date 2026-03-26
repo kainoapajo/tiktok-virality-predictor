@@ -1,0 +1,52 @@
+﻿## Codebook
+
+
+Below is a description of all variables referenced in the final combined dataset (music_df) used for this analysis. These features represent the acoustic properties calculated by the Spotify Web API.
+
+
+track_name: title of the song.
+
+
+artists: name of the artist(s) who performed the song.
+
+
+danceability: a measure from 0.0 to 1.0 describing how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity.
+
+
+energy: a measure from 0.0 to 1.0 representing a perceptual measure of intensity and activity. typically, energetic tracks feel fast, loud, and noisy.
+
+
+key: the estimated overall key of the track (categorical).
+
+
+loudness: the overall loudness of a track in decibels (dB).
+
+
+mode: indicates the modality (major or minor) of a track, the type of scale from which its melodic content is derived (categorical).
+
+
+speechiness: detects the presence of spoken words (lyrics) in a track.
+
+
+acousticness: a confidence measure from 0.0 to 1.0 of whether the track is acoustic.
+
+
+instrumentalness: predicts whether a track contains no vocals.
+
+
+liveness: detects the presence of an audience in the recording.
+
+
+valence: a measure from 0.0 to 1.0 describing the musical positiveness conveyed by a track. tracks with high valence sound more positive (happy or cheerful), while tracks with low valence sound more negative (sad, depressed, or angry).
+
+
+tempo: the overall estimated tempo of a track in beats per minute (BPM).
+
+
+duration_ms: the duration of the track in milliseconds.
+
+
+time_signature: an estimated overall time signature of a track, organizing the rhythmic flow.
+
+
+is_viral: the target variable for our models. a factor where 1 indicates the song is from the viral TikTok dataset and 0 indicates it is from the general Spotify control group.

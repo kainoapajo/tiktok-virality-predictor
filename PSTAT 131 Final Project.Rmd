@@ -1,0 +1,474 @@
+---
+title: "Predicting TikTok Virality"
+subtitle: "A Comparative Analysis of Audio Features in Trending vs. Popular Spotify Tracks"
+author: "Kainoa Pajo"
+date: "2026-03-18"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+```{r, echo=FALSE, out.width="50%", fig.align="center"}
+knitr::include_graphics("penguinjamming.gif")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)   # Includes ggplot2, dplyr, readr for data manipulation and plotting
+library(tidymodels)  # Used for machine learning models and splits
+library(janitor)     # Used for clean_names() function
+library(corrplot)    # Used for correlation matrix
+```
+
+# Introduction
+
+## Project Background and Objectives
+
+The rise of short-form video platforms has fundamentally changed the music industry, with TikTok serving as a massive catalyst for song virality. This project aims to identify the underlying audio features that make a song likely to trend on the platform. To explore this, I am using a dataset of popular TikTok tracks from 2022 and comparing them against a control group of general tracks sourced from Spotify. By combining and balancing these datasets, I am able analyze the distinct sonic profiles of viral hits versus non-viral tracks.
+
+The primary goal of this project is to build a machine learning classification model capable of predicting whether a song will go viral on TikTok (is_viral = 1) or not (is_viral = 0). To achieve this, I will analyze various acoustic properties defined by Spotify's API, such as "danceability" (how suitable a track is for dancing) and "valence" (the musical positiveness delivered by a track). By exploring the data and comparing multiple models, I hope to uncover which specific features are the strongest predictors of modern virality.
+
+## Data Sourcing
+
+The data for this analysis is curated from two distinct sources:
+
+TikTok Data: The tiktok2022.csv dataset, which contains track features for popular songs on the platform. https://www.kaggle.com/datasets/sveta151/tiktok-popular-songs-2022
+
+```{r, echo=FALSE, out.width="25%", fig.align="center"}
+knitr::include_graphics("tiktok.gif")
+```
+
+Spotify Data: The spotify.csv dataset, which serves as our general population control group. 
+https://www.kaggle.com/datasets/maharshipandya/-spotify-tracks-dataset
+
+```{r, echo=FALSE, out.width="25%", fig.align="center"}
+knitr::include_graphics("spotify.gif")
+```
+
+## Data Cleaning
+
+```{r}
+# load the data
+tiktok_raw <- read_csv("tiktok2022.csv") %>% clean_names()
+spotify_raw <- read_csv("spotify.csv") %>% clean_names()
+
+# add response variable 'is_viral' to TikTok dataset
+tiktok_data <- tiktok_raw %>%
+  mutate(is_viral = 1) %>%
+  # rename 'artist_name' to 'artists' to match Spotify dataset
+  rename(artists = artist_name)
+
+# determine how many rows in TikTok dataset (263)
+n_viral <- nrow(tiktok_data)
+
+# prepare control group from the general Spotify dataset
+# use most popular tracks (Top 200)
+spotify_control <- spotify_raw %>%
+  mutate(is_viral = 0) %>%
+  # sort by popularity to ensure use of top tracks
+  arrange(desc(popularity)) %>% 
+  select(track_name, artists, danceability, energy, key, loudness, 
+         mode, speechiness, acousticness, instrumentalness, liveness, 
+         valence, tempo, duration_ms, time_signature, is_viral) %>%
+  # get exact number needed from the top of the popularity charts
+  slice_head(n = n_viral)
+
+# make one clean dataset
+music_df <- bind_rows(
+  # select matching columns from TikTok dataset
+  tiktok_data %>% select(any_of(colnames(spotify_control))),
+  spotify_control
+) %>%
+  # convert response variable to a factor for tidymodels
+  mutate(is_viral = factor(is_viral, levels = c("1", "0")),
+         # convert mode and key to factors
+         mode = factor(mode),
+         key = factor(key))
+
+# check that final balance is 263 for both
+table(music_df$is_viral)
+```
+
+## Codebook
+
+Below is a description of all variables referenced in the final combined dataset (music_df) used for this analysis. These features represent the acoustic properties calculated by the Spotify Web API.
+
+track_name: title of the song.
+
+artists: name of the artist(s) who performed the song.
+
+danceability: a measure from 0.0 to 1.0 describing how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity.
+
+energy: a measure from 0.0 to 1.0 representing a perceptual measure of intensity and activity. typically, energetic tracks feel fast, loud, and noisy.
+
+key: the estimated overall key of the track (categorical).
+
+loudness: the overall loudness of a track in decibels (dB).
+
+mode: indicates the modality (major or minor) of a track, the type of scale from which its melodic content is derived (categorical).
+
+speechiness: detects the presence of spoken words (lyrics) in a track.
+
+acousticness: a confidence measure from 0.0 to 1.0 of whether the track is acoustic.
+
+instrumentalness: predicts whether a track contains no vocals.
+
+liveness: detects the presence of an audience in the recording.
+
+valence: a measure from 0.0 to 1.0 describing the musical positiveness conveyed by a track. tracks with high valence sound more positive (happy or cheerful), while tracks with low valence sound more negative (sad, depressed, or angry).
+
+tempo: the overall estimated tempo of a track in beats per minute (BPM).
+
+duration_ms: the duration of the track in milliseconds.
+
+time_signature: an estimated overall time signature of a track, organizing the rhythmic flow.
+
+is_viral: the target variable for our models. a factor where 1 indicates the song is from the viral TikTok dataset and 0 indicates it is from the general Spotify control group.
+
+# Exploratory Data Analysis
+
+Before exploring the distributions and relationships of the audio features, let's first check for missing data in the combined dataset. 
+
+```{r}
+# check for missing data
+sum(is.na(music_df))
+```
+
+As the output above shows, there are 0 missing values in the combined dataset. Since the Spotify API returns complete data for these specific features, no data imputation or row dropping is necessary for further analysis.
+
+## Feature Distributions by Virality
+
+To begin this visual exploration, I want to look at how specific continuous variables differ between these viral TikTok tracks and the general Spotify control group.
+
+```{r}
+library(ggplot2)
+
+# boxplot for danceability
+ggplot(music_df, aes(x = is_viral, y = danceability, fill = is_viral)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("0" = "#EE1D52", "1" = "#69C9D0")) +
+  labs(title = "Danceability: Viral vs. Non-Viral Tracks", 
+       x = "Is Viral (0 = No, 1 = Yes)", 
+       y = "Danceability Score") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+  
+The boxplot above illustrates the distribution of danceability scores. It does this by observing the median danceability for viral TikTok tracks (1) and comparing it to the non-viral control group (0). Given TikTok's format as a short-form video platform heavily reliant on dance trends, I expect viral tracks to appear higher in this metric.
+
+Next, I'd like to examine the energy levels using a density plot. This visual highlights where the bulk of the data points fall for both classes. It allows me to determine if viral tracks tend to cluster around high-energy, intense sounds, or if there is a broader spread compared to standard Spotify listening habits.
+
+```{r}
+# density plot for energy
+ggplot(music_df, aes(x = energy, fill = is_viral)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("0" = "#EE1D52", "1" = "#69C9D0")) +
+  labs(title = "Energy Distribution by Virality", 
+       x = "Energy Score", 
+       y = "Density",
+       fill = "Is Viral") +
+  theme_minimal()
+```
+
+This density plot compares the "signature" of viral TikTok songs (pink) against popular Spotify tracks (cyan). In terms of viral Tiktok songs, the pink curve is much taller and narrower. This tells me that TikTok virality isn't just about having high danceability—it’s about hitting a very specific, consistent range (roughly between 0.7 and 0.8). In Spotify's scenario, the cyan curve for popular Spotify tracks is flatter and wider. This indicates that while a song can become "popular" on Spotify with a wide variety of danceability scores (even lower ones), it is much harder to go "viral" on TikTok without hitting that specific rhythmic peak.
+
+Since the pink peak is shifted slightly to the right of the cyan peak, Danceability is likely a strong predictor for this model. However, since the two curves still overlap significantly, the model will need to look at other features (like Energy or Tempo) to decipher between them.
+
+## Categorical Feature Analysis
+
+Next, I'd like to explore the categorical predictors, such as the musical modality (major vs. minor scale) of the tracks.
+
+```{r}
+# bar plot for mode
+ggplot(music_df, aes(x = mode, fill = is_viral)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = c("0" = "#EE1D52", "1" = "#69C9D0")) +
+  labs(title = "Track Modality by Virality", 
+       x = "Mode (0 = Minor, 1 = Major)", 
+       y = "Count",
+       fill = "Is Viral") +
+  theme_minimal()
+```
+
+This grouped bar chart compares the count of major and minor key songs between the two groups. It helps to determine if a specific mode is overwhelmingly favored by the TikTok algorithm or user base. 
+
+As displayed, in both datasets, songs in a Major key (1) are significantly more frequent than those in a Minor key (0). This suggests that "happy" or "bright" tonalities are a baseline requirement for general popularity across both platforms. Also, since the ratio of Major to Minor songs is almost exactly the same for the pink (Viral) and cyan (Spotify) bars, I'll conclude that Mode is likely not a deciding factor in what makes a song go viral on TikTok specifically.
+
+From a machine learning perspective, this tells me that mode might have low "Variable Importance." This determination comes from the fact that in this scenario, it doesn't help distinguish a viral song from a regular popular song. As a result, the model will likely rely more heavily on continuous features like danceability or energy to make accurate predictions.
+
+## Predictor Correlation
+
+Before building the models, it is important to check for multicollinearity. This ensures that the predictor variables aren't too highly correlated with each other. If two variables provide nearly identical information, it can make it difficult for the model to determine the individual impact of each feature, potentially leading to less stable results."
+
+```{r}
+library(corrplot)
+
+# isolate only numeric continuous variables for correlation matrix
+numeric_vars <- music_df %>% 
+  select(danceability, energy, loudness, speechiness, acousticness, 
+         instrumentalness, liveness, valence, tempo, duration_ms)
+
+# calculate correlation matrix
+cor_matrix <- cor(numeric_vars)
+
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", number.cex = 0.6)
+```
+
+This correlation matrix allows us to identify variables that move closely together before constructing our predictive models. Beyond technical model stability, these relationships mirror the logical structure of music production; for example, the strong negative correlation between energy and acousticness ($r \approx -0.73$) is expected, as high-energy tracks are typically synthesized or heavily processed rather than "unplugged." 
+
+Most importantly, is_viral shows its strongest positive associations with danceability and valence, suggesting that while "energy" is a staple of popular Spotify music, "movement" and "mood" may be the specific levers that push a track into TikTok virality. Since there are no observed instances of extreme multicollinearity ($r > 0.8$), I can proceed with the confidence that each audio feature provides enough unique information to justify its inclusion in the final machine learning models, particularly for the linear models which are most sensitive to unnecessary predictors.
+
+# Data Splitting and Resampling
+
+Before building the machine learning models, I need to split `music_df` into a training set and a testing set. Following best practices, the plan is to look 70% of the data and allocate it to training set to ensure the models have enough examples to learn from, and reserve the remaining 30% for final testing. To explain, the training set (70%) will be what's observed to learn which features (like high energy or danceability) usually lead to a song going viral. The testing set (30%) will be stashed until the end for when a good formula for virality has been established and will then be used to predict the outcome for these songs to see how accurate it really is.
+
+Since I want to ensure that the proportion of viral to non-viral tracks remains completely balanced in both sets, I plan to stratify this split based on the outcome variable, `is_viral`. In other words, I plan to ensure that there is an even representation of both groups.
+
+```{r}
+# set seed for reproducibility
+set.seed(2026)
+
+# create initial 70/30 split, stratified on target variable
+music_split <- initial_split(music_df, prop = 0.70, strata = is_viral)
+
+# extract training and testing sets
+music_train <- training(music_split)
+music_test <- testing(music_split)
+
+dim(music_train)
+dim(music_test)
+```
+
+To prevent overfitting and properly tune the model hyperparameters later on, I will need to set up cross-validation on the training data. To do this, I will create 5 folds, again ensuring that stratification is applied on is_viral so each fold contains a representative sample of my classes.
+
+```{r}
+# create 5-fold cross-validation sets from training data
+music_folds <- vfold_cv(music_train, v = 5, strata = is_viral)
+```
+
+## Model Recipe
+
+With the data successfully split, I need to construct a recipe that tells the models how to handle the specific variables in my dataset.
+
+My dataset contains identifying columns (track_name and artists) that are not acoustic features and should not be used as predictors. I will update their roles so they are retained in the dataset for identification but ignored by the algorithms. Furthermore, many machine learning models require continuous variables to be centered and scaled, and categorical variables to be transformed into numeric formats.
+
+```{r}
+music_recipe <- recipe(is_viral ~ ., data = music_train) %>%
+  # keep track_name and artists in data, do not use as predictors
+  update_role(track_name, artists, new_role = "ID") %>%
+  # dummy encode categorical predictors (mode and key)
+  step_dummy(all_nominal_predictors()) %>%
+  # center and scale continuous acoustic features
+  step_normalize(all_numeric_predictors())
+
+music_recipe
+```
+
+This recipe ensures that my outcome variable (is_viral) is properly modeled as a function of the acoustic predictor variables, while dummy-encoding, or turning categorical words (like "Major" or "Minor") into numbers (0 or 1) so the computer can understand them, my categorical features and standardizing the numeric features so no single variable dominates the model due to its raw scale.
+
+# Model Building and Tuning
+
+With my data prepared and recipe established, I will fit four distinct machine learning models to identify the best predictor of TikTok virality. The models include a baseline Logistic Regression, an Elastic Net model, a Pruned Decision Tree, and a Random Forest. 
+
+### 1. Model Specifications
+
+First, I specify the computational engines and identify which hyperparameters need to be tuned via cross-validation to optimize their performance.
+
+```{r}
+# 1. standard logistic regression (baseline)
+log_spec <- logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+
+# 2. elastic net regression (tuning penalty and mixture)
+elastic_spec <- logistic_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+# 3. pruned decision tree (tuning cost complexity)
+tree_spec <- decision_tree(cost_complexity = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+# 4. random forest (tuning mtry, trees, and min_n)
+rf_spec <- rand_forest(mtry = tune(), trees = tune(), min_n = tune()) %>%
+  set_engine("ranger") %>%
+  set_mode("classification")
+```
+
+### 2. Workflows
+
+Next, I plan to bundle my pre-processing music_recipe with each of my model specifications into workflows. This ensures the data is processed identically across all four model types.
+
+```{r}
+log_wf <- workflow() %>% add_recipe(music_recipe) %>% add_model(log_spec)
+elastic_wf <- workflow() %>% add_recipe(music_recipe) %>% add_model(elastic_spec)
+tree_wf <- workflow() %>% add_recipe(music_recipe) %>% add_model(tree_spec)
+rf_wf <- workflow() %>% add_recipe(music_recipe) %>% add_model(rf_spec)
+```
+
+### 3. Hyperparameter Tuning Grids
+
+For the models that require tuning, I need to establish grids with reasonable ranges for the hyperparameters to test across the cross-validation folds.
+
+```{r}
+# elastic net grid
+elastic_grid <- grid_regular(penalty(), mixture(), levels = 5)
+
+# decision tree grid
+tree_grid <- grid_regular(cost_complexity(), levels = 10)
+
+# random forest grid
+# mtry ranges from 1 to number of predictors (13 acoustic features)
+rf_grid <- grid_regular(mtry(range = c(1, 13)), 
+                        trees(range = c(200, 600)), 
+                        min_n(range = c(5, 20)), 
+                        levels = 3)
+```
+
+### 4. Fitting and Tuning the Models
+Now, it's time to fit the models using the 5-fold cross-validation sets (music_folds). For the models with tunable parameters, I use tune_grid() to find the optimal combinations.
+
+```{r}
+# fit logistic regression 
+log_fit <- fit_resamples(log_wf, 
+                         resamples = music_folds, 
+                         metrics = metric_set(roc_auc, accuracy))
+
+# tune elastic net
+elastic_tune <- tune_grid(elastic_wf, 
+                          resamples = music_folds, 
+                          grid = elastic_grid, 
+                          metrics = metric_set(roc_auc, accuracy))
+
+# tune decision tree
+tree_tune <- tune_grid(tree_wf, 
+                       resamples = music_folds, 
+                       grid = tree_grid, 
+                       metrics = metric_set(roc_auc, accuracy))
+
+# tune random forest
+rf_tune <- tune_grid(rf_wf, 
+                     resamples = music_folds, 
+                     grid = rf_grid, 
+                     metrics = metric_set(roc_auc, accuracy))
+```
+
+### 5. Evaluating Tuning Results
+To understand how the hyperparameters affected model performance, I'd like to visualize the results of our tuning process using the autoplot() function.
+
+```{r}
+# plot elastic net results
+autoplot(elastic_tune) + 
+  theme_minimal() + 
+  labs(title = "Elastic Net Tuning Results")
+
+# plot decision tree results
+autoplot(tree_tune) + 
+  theme_minimal() + 
+  labs(title = "Decision Tree Tuning Results")
+
+# plot random forest results
+autoplot(rf_tune) + 
+  theme_minimal() + 
+  labs(title = "Random Forest Tuning Results")
+```
+
+As seen in the plots above, different combinations of hyperparameters yield varying Area Under the ROC Curve (ROC AUC) and Accuracy scores. By visualizing these grids, we can identify which specific tuning parameters resulted in the highest predictive performance for each model before we finalize them. 
+
+In doing so, it is observed that in the Random Forest plot, performance (ROC AUC) increases as mtry is increased, but eventually levels off. This tells that the model needs a certain amount of complexity to "understand" TikTok trends, but adding too much doesn't necessarily make it better, just slower.
+
+For the Elastic Net, it shows which combination of "simplifying" the model (Penalty) and "selecting" variables (Mixture) works best. If the line dips sharply, that means that the model is becoming too simple and is "underfitting" essentially. In other words, it’s ignoring important musical features that it needs to tell the two groups apart.
+
+Lastly, for the Decision Tree plot, looking at cost complexity reveals exactly when the tree gets too "choppy." A very low cost complexity means a massive tree that might just be memorizing the Spotify songs. As the cost increases, the tree gets smaller. This plot determines the exact point where the tree is small enough to be useful but large enough to be accurate.
+
+# Model Comparison and Selection
+
+Now that I have fitted and tuned tje four models, the next step is to compare their performance to select the best one for my final predictions. I will use the Area Under the ROC Curve (ROC AUC) as my primary metric for comparison, as it is a strong measure for classification tasks.
+
+```{r}
+# extract best ROC AUC score for each model
+log_metrics <- collect_metrics(log_fit) %>% 
+  filter(.metric == "roc_auc") %>% 
+  mutate(model = "Logistic Regression") %>%
+  select(model, mean)
+
+elastic_metrics <- show_best(elastic_tune, metric = "roc_auc") %>% 
+  slice(1) %>% 
+  mutate(model = "Elastic Net") %>%
+  select(model, mean)
+
+tree_metrics <- show_best(tree_tune, metric = "roc_auc") %>% 
+  slice(1) %>% 
+  mutate(model = "Decision Tree") %>%
+  select(model, mean)
+
+rf_metrics <- show_best(rf_tune, metric = "roc_auc") %>% 
+  slice(1) %>% 
+  mutate(model = "Random Forest") %>%
+  select(model, mean)
+
+# combine and display results
+model_comparisons <- bind_rows(log_metrics, elastic_metrics, tree_metrics, rf_metrics) %>%
+  arrange(desc(mean))
+
+model_comparisons
+```
+
+Based on the cross-validation results, the Random Forest model yielded the highest average ROC AUC [0.8651265]. Therefore, I will finalize my workflow using the optimal hyperparameters found for the Random Forest and use it to predict the testing set.
+
+# Final Model Evaluation
+
+For the Final Model Evaluation, I  will now apply the best Random Forest model to the music_test data that was set aside at the very beginning of this project. It is crucial to only use the best model on the testing set to get an unbiased estimate of its real-world performance.
+
+```{r}
+# select best hyperparameters for the random forest
+best_rf_params <- select_best(rf_tune, metric = "roc_auc")
+
+# finalize the workflow with these optimal parameters
+final_rf_wf <- finalize_workflow(rf_wf, best_rf_params)
+
+# fit the final model to the testing data
+final_fit <- last_fit(final_rf_wf, split = music_split)
+
+# report the testing error (Accuracy and ROC AUC)
+collect_metrics(final_fit)
+```
+
+The metrics above display the testing error of the final model. To visualize this predictive performance, I'd like to generate a final ROC curve.
+
+```{r}
+# plot the final ROC curve
+collect_predictions(final_fit) %>%
+  roc_curve(is_viral, .pred_1) %>%
+  autoplot() +
+  theme_minimal() +
+  labs(title = "Final ROC Curve on Testing Data (Random Forest)")
+```
+
+The ROC curve visualizes the trade-off between the true positive rate and the false positive rate. The closer the curve pushes toward the top-left corner, the better my model is at distinguishing between viral TikTok tracks and general Spotify tracks. 
+
+In this, the dotted diagonal line represents a model with no predictive power. The fact that the solid curve arches high above this line shows that the model has successfully identified distinct acoustic patterns that separate TikTok virality from general Spotify popularity.
+
+The curve climbs very quickly on the left side designating that the model can identify a large majority of "Viral" tracks (True Positives) while only misclassifying a very small percentage of Spotify tracks as viral (False Positives).
+
+Lastly, in terms of predictive confidence, since the curve pushes so close to the top-left corner, I can determine with confidence that the Area Under the Curve (AUC) is high. In simpler terms, this means if I picked one random viral song and one random Spotify song, the model would correctly identify which is which more often than not.
+
+# Conclusion
+
+This project set out to determine if specific acoustic features could reliably predict a track's potential to go viral on TikTok. By analyzing a balanced dataset of trending TikTok songs and a control group of popular Spotify tracks, I explored various sonic characteristics such as danceability, energy, and valence. Throughout my exploratory data analysis, I noted distinct trends, confirming that platforms like TikTok, which rely heavily on movement and short-form engagement, tend to favor tracks with specific rhythmic and energetic profiles.
+
+After prepping the data, I trained four distinct machine learning models: a baseline Logistic Regression, an Elastic Net, a Pruned Decision Tree, and a Random Forest. Upon tuning their hyperparameters via 5-fold cross-validation, the Random Forest model emerged as the top performer, achieving a strong cross-validation ROC AUC of 0.865. When applied to the unseen testing data, the final model achieved an exceptional ROC AUC of 0.912. This increase in performance on the testing set indicates a highly strong model that successfully generalized beyond its training data. It demonstrates an outstanding ability to classify viral tracks, confirming that original studio acoustic features hold significant predictive power when identifying songs that resonate with the TikTok user base.
+
+While the balanced dataset provided enough signal to achieve these results, the relatively small sample size of 526 total tracks (263 per class) suggests that these findings are a preliminary exploration. Future research with larger datasets could further validate if these acoustic trends remain consistent across a wider variety of genres and years. Furthermore, it would be highly beneficial to incorporate non-acoustic features into the models, such as artist follower counts, marketing budget estimates, or the time of year a song is released, as algorithmic virality is likely influenced by a combination of sonic profile and social context.
+
+Finally, it is important to explicitly acknowledge a significant limitation regarding measurement error within this analysis. TikTok virality is heavily driven by "remix culture," where audio is frequently sped-up, slowed-down, or heavily altered by users. The acoustic features pulled from the Spotify API represent the canonical studio versions of these tracks. Therefore, our results must be interpreted carefully as they highlight the predictive contribution and associations of the original studio track's sonic profile, rather than the exact audio manipulation that may have been used in the viral TikTok video clips themselves.
+
+Ultimately, this study highlights that while digital trends may seem random, they are often anchored by specific acoustic foundations; by understanding these patterns, we gain a clearer picture of the sonic DNA that defines the tracks we choose to create to, share, and dance to every day.
+
+```{r, echo=FALSE, out.width="50%", fig.align="center"}
+knitr::include_graphics("penguinjamming2.gif")
+```
